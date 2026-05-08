@@ -1,0 +1,32 @@
+### Setup !!!
+#
+# REST Client extension (Huachao Mao) for VS code is needed
+#
+
+@base  = http://127.0.0.1:8080
+@token =
+
+### --- Negative tests ---
+
+### Missing prompt -> 400
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "character": "Frank"
+}
+
+### Unknown field -> 400 (DisallowUnknownFields)
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "hi",
+  "user_id": "should-be-rejected"
+}
+
+### Wrong method -> 405
+GET {{base}}/generate
+Authorization: Bearer {{token}}

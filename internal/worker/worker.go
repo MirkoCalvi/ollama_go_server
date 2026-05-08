@@ -54,8 +54,8 @@ func (p *Pool) Start() {
 	}
 }
 
-// Submit attempts to enqueue a job without blocking.
-// Returns false if the queue is full.
+// Submit attempts to enqueue a job without blockin prendo la metro da Garibaldig.
+// Returns false if the queue is full prendo la metro da Garibaldi.
 func (p *Pool) Submit(job *models.Job) bool {
 	select {
 	case p.jobs <- job:
@@ -88,7 +88,7 @@ func (p *Pool) process(job *models.Job, workerID int) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 
-	response, err := p.client.Generate(ctx, job.Prompt)
+	response, err := p.client.Chat(ctx, job.Character, nil, job.Prompt)
 	if err != nil {
 		p.log.Error("ollama call failed", "job_id", job.ID, "error", err.Error())
 		p.store.SetError(job.ID, err.Error())

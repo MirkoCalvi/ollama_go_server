@@ -9,6 +9,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +18,10 @@ import (
 	"syscall"
 	"time"
 
+	firebase "firebase.google.com/go/v4"
+	"google.golang.org/api/option"
+
+	"github.com/MirkoCalvi/httpserver/internal/auth"
 	"github.com/MirkoCalvi/httpserver/internal/handlers"
 	"github.com/MirkoCalvi/httpserver/internal/logger"
 	"github.com/MirkoCalvi/httpserver/internal/models"
@@ -33,7 +39,7 @@ const (
 
 	workerCount       = 10
 	queueSize         = 100
-	defaultJobTimeout = 60 * time.Second
+	defaultJobTimeout = 180 * time.Second
 	shutdownTimeout   = 15 * time.Second
 )
 
@@ -41,6 +47,18 @@ func main() {
 	log := logger.New()
 
 	cfg := loadConfig(log)
+
+	// Pick an auth strategy:
+	//   DEV_MODE=1                  → DevMiddleware (loopback only)
+	//   FIREBASE_CREDENTIALS_FILE=… → verify Firebase ID tokens
+	// Exactly one must be configured; the server fails closed otherwise.
+	authCtx, authCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	authMiddleware, err := buildAuth(authCtx, log, &cfg)
+	authCancel()
+	if err != nil {
+		log.Error("auth setup failed", "error", err.Error())
+		os.Exit(1)
+	}
 
 	store := models.NewJobStore()
 	client := ollama.NewClient(cfg.ollamaURL, cfg.ollamaModel)
@@ -52,9 +70,10 @@ func main() {
 	mux := http.NewServeMux()
 	// Method enforcement happens inside each handler so we can return 405
 	// with a useful Allow header instead of mux returning 404 for the wrong
-	// verb.
-	mux.HandleFunc("/generate", h.Generate)
-	mux.HandleFunc("/jobs/", h.GetJob)
+	// verb. Auth wraps each protected route; /healthz is intentionally
+	// unauthenticated so liveness probes don't need a key.
+	mux.Handle("/generate", authMiddleware(http.HandlerFunc(h.Generate)))
+	mux.Handle("/jobs/", authMiddleware(http.HandlerFunc(h.GetJob)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -138,6 +157,68 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// buildAuth selects the middleware to wrap protected routes with.
+//
+// Exactly one of DEV_MODE=1 or FIREBASE_CREDENTIALS_FILE=... must be set;
+// the server fails closed if neither or both are set.
+func buildAuth(ctx context.Context, log *logger.Logger, cfg *config) (func(http.Handler) http.Handler, error) {
+	devMode := os.Getenv("DEV_MODE") == "1"
+	credPath := os.Getenv("FIREBASE_CREDENTIALS_FILE")
+
+	switch {
+	case devMode && credPath != "":
+		return nil, errors.New("set either DEV_MODE=1 or FIREBASE_CREDENTIALS_FILE, not both")
+	case !devMode && credPath == "":
+		return nil, errors.New("no auth configured: set FIREBASE_CREDENTIALS_FILE or DEV_MODE=1")
+	}
+
+	if devMode {
+		safeAddr, err := loopbackOnly(cfg.serverAddr)
+		if err != nil {
+			return nil, err
+		}
+		if safeAddr != cfg.serverAddr {
+			log.Warn("DEV_MODE rewriting SERVER_ADDR to loopback",
+				"original", cfg.serverAddr, "rewritten", safeAddr)
+			cfg.serverAddr = safeAddr
+		}
+		log.Warn("DEV_MODE enabled — auth bypassed; every request runs as user",
+			"user_id", auth.DevUserID, "addr", cfg.serverAddr)
+		return auth.DevMiddleware, nil
+	}
+
+	// firebase.NewApp picks up the project ID from the credentials file.
+	// We don't need to set firebase.Config.ProjectID explicitly.
+	app, err := firebase.NewApp(ctx, nil, option.WithCredentialsFile(credPath))
+	if err != nil {
+		return nil, fmt.Errorf("init firebase app from %q: %w", credPath, err)
+	}
+	client, err := app.Auth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("init firebase auth client: %w", err)
+	}
+	log.Info("auth configured", "source", "firebase", "credentials_file", credPath)
+	return auth.NewFirebase(client).Middleware, nil
+}
+
+// loopbackOnly enforces that DEV_MODE only binds a loopback interface.
+// An unset host (":8080") binds 0.0.0.0 by default — we rewrite that to
+// 127.0.0.1 so the rule is enforced even when the user takes the default.
+func loopbackOnly(addr string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("invalid SERVER_ADDR %q: %w", addr, err)
+	}
+	switch host {
+	case "":
+		return net.JoinHostPort("127.0.0.1", port), nil
+	case "localhost", "127.0.0.1", "::1":
+		return addr, nil
+	default:
+		return "", fmt.Errorf("DEV_MODE refuses non-loopback host %q (use 127.0.0.1, localhost, or :PORT)", host)
+	}
 }
 
 // statusRecorder lets the logging middleware capture the response status

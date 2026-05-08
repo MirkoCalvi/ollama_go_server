@@ -4,9 +4,15 @@
 //   - POST /generate     — accept a prompt, enqueue a job, return its ID.
 //   - GET  /jobs/{id}    — return the current state of a job.
 //
-// The mux registered in main.go uses plain path-prefix routing for /jobs/
-// (since this project targets Go 1.18, before pattern-based ServeMux). The
-// {id} segment is parsed inside GetJob.
+// Both routes are protected by auth middleware in main.go: the handlers
+// expect the authenticated user_id to be present on r.Context() (via
+// auth.UserFrom). The request body for /generate carries only the prompt;
+// the job's UserID is taken from the authenticated principal, never from
+// the client.
+//
+// The mux uses plain path-prefix routing for /jobs/ (since this project
+// targets Go 1.18, before pattern-based ServeMux). The {id} segment is
+// parsed inside GetJob.
 package handlers
 
 import (
@@ -17,8 +23,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/MirkoCalvi/httpserver/internal/auth"
 	"github.com/MirkoCalvi/httpserver/internal/logger"
 	"github.com/MirkoCalvi/httpserver/internal/models"
+	"github.com/MirkoCalvi/httpserver/internal/ollama/personalities"
 	"github.com/MirkoCalvi/httpserver/internal/worker"
 )
 
@@ -39,9 +47,13 @@ func New(store *models.JobStore, pool *worker.Pool, log *logger.Logger) *Handler
 }
 
 // generateRequest is the body shape accepted by POST /generate.
+//
+// Note: there is no user_id field. The authenticated user comes from the
+// Authorization header via auth middleware. DisallowUnknownFields will
+// reject any client that still sends user_id in the body.
 type generateRequest struct {
-	UserID string `json:"user_id"`
 	Prompt string `json:"prompt"`
+	Character string `json:"character"`
 }
 
 // jobResponse is the body shape returned by both /generate and /jobs/{id}.
@@ -58,10 +70,22 @@ type jobResponse struct {
 // Generate handles POST /generate. Validates input, creates a Job in the
 // store with status=queued, hands it to the worker pool, and returns 202
 // Accepted with the job_id. The actual Ollama call happens asynchronously.
+//
+// The job's UserID is the authenticated principal from r.Context(); the
+// body cannot override it.
 func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID := auth.UserFrom(r.Context())
+	if userID == "" {
+		// Auth middleware should have rejected before reaching here. If it
+		// didn't, something is wired wrong — fail closed rather than
+		// creating an unowned job.
+		writeError(w, http.StatusInternalServerError, "missing authenticated user")
 		return
 	}
 
@@ -75,15 +99,27 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "user_id and prompt are required")
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+
+	if strings.TrimSpace(req.Character) == "" {
+		writeError(w, http.StatusBadRequest, "Character is required")
+		return
+	}
+
+	newCharacter := personalities.Get(req.Character)
+	if newCharacter == nil {
+		writeError(w, http.StatusBadRequest, "invalid Character type")
 		return
 	}
 
 	now := time.Now()
 	job := &models.Job{
 		ID:        uuid.NewString(),
-		UserID:    req.UserID,
+		UserID:    userID,
+		Character: newCharacter,
 		Prompt:    req.Prompt,
 		Status:    models.StatusQueued,
 		CreatedAt: now,
@@ -100,21 +136,28 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.log.Info("job queued", "job_id", job.ID, "user_id", job.UserID)
+	// Always report "queued" here. Reading job.Status after Submit would
+	// race with a worker that has already picked the job up and called
+	// store.UpdateStatus on the same *Job.
 	writeJSON(w, http.StatusAccepted, jobResponse{
 		JobID:  job.ID,
-		Status: job.Status,
+		Status: models.StatusQueued,
 	})
 }
 
-// GetJob handles GET /jobs/{id}. Returns 404 if the ID is unknown.
-//
-// Path parsing is manual: the mux is registered for the prefix "/jobs/", so
-// anything after that prefix is treated as the ID. Empty IDs and IDs with
-// further path segments are rejected.
+// GetJob handles GET /jobs/{id}. Returns 404 if the ID is unknown OR if the
+// job belongs to a different user — the two cases are intentionally
+// indistinguishable so non-owners can't probe which job IDs exist.
 func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID := auth.UserFrom(r.Context())
+	if userID == "" {
+		writeError(w, http.StatusInternalServerError, "missing authenticated user")
 		return
 	}
 
@@ -125,7 +168,7 @@ func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job, ok := h.store.Get(id)
-	if !ok {
+	if !ok || job.UserID != userID {
 		writeError(w, http.StatusNotFound, "job not found")
 		return
 	}

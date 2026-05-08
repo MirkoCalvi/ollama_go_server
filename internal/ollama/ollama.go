@@ -14,6 +14,47 @@ import (
 	"net/http"
 )
 
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatOptions struct {
+	Temperature float64  `json:"temperature,omitempty"`
+	TopP        float64  `json:"top_p,omitempty"`
+	TopK        int      `json:"top_k,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
+}
+
+// defaultStop hard-cuts generation when the model starts drifting into
+// document-completion mode (markdown headers, simulated dialogues, role labels).
+// Belt-and-braces companion to the "Output format" rules in each system prompt.
+var defaultStop = []string{
+	"\n---",
+	"\n\n**",
+	"\n# ",
+	"\n## ",
+	"Simulated Conversation",
+	"User:",
+	"Assistant:",
+}
+
+type chatRequest struct {
+	Model    string        `json:"model"`
+	Messages []chatMessage `json:"messages"`
+	Stream   bool          `json:"stream"`
+	Options  chatOptions   `json:"options,omitempty"`
+}
+
+type chatResponse struct {
+	Message struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"message"`
+
+	Done bool `json:"done"`
+}
+
 // Client wraps an *http.Client with Ollama-specific defaults.
 type Client struct {
 	baseURL string
@@ -35,35 +76,55 @@ func NewClient(baseURL, model string) *Client {
 	}
 }
 
-type generateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-}
-
-// generateResponse mirrors the relevant subset of the Ollama response.
-// The full response carries timing fields we don't need.
-type generateResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
-}
-
 // Generate sends prompt to Ollama and returns the model's response text.
 // The caller's ctx governs the timeout.
-func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
-	body, err := json.Marshal(generateRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
+func (c *Client) Chat(
+	ctx context.Context,
+	character *Character,
+	history []chatMessage,
+	userMessage string,
+) (string, error) {
+
+	messages := []chatMessage{
+		{
+			Role:    "system",
+			Content: character.SystemPrompt,
+		},
+	}
+
+	messages = append(messages, history...)
+
+	messages = append(messages, chatMessage{
+		Role:    "user",
+		Content: userMessage,
+	})
+
+	body, err := json.Marshal(chatRequest{
+		Model:    c.model,
+		Messages: messages,
+		Stream:   false,
+
+		Options: chatOptions{
+			Temperature: character.Parameters.Temperature,
+			TopP:        character.Parameters.TopP,
+			TopK:        character.Parameters.TopK,
+			Stop:        defaultStop,
+		},
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/api/chat",
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
+
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -73,15 +134,19 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read a bounded chunk of the error body so a misbehaving server
-		// can't make us allocate unboundedly.
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(b))
+		return "", fmt.Errorf(
+			"ollama returned status %d: %s",
+			resp.StatusCode,
+			string(b),
+		)
 	}
 
-	var out generateResponse
+	var out chatResponse
+
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
-	return out.Response, nil
+
+	return out.Message.Content, nil
 }

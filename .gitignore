@@ -1,0 +1,19 @@
+# Compiled binaries
+/bin/
+/httpserver
+
+# Test artifacts
+*.test
+*.out
+coverage.out
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local env files (do not commit secrets)
+.env
+.env.local
+*.local

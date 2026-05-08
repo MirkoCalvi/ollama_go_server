@@ -1,0 +1,63 @@
+### Setup !!!
+#
+# REST Client extension (Huachao Mao) for VS code is needed
+#
+
+### Variables
+# In DEV_MODE the auth header is ignored, so leave @token empty.
+# For Firebase auth, paste an ID token (e.g. from the frontend) into @token.
+
+@base  = http://127.0.0.1:8080
+@token =
+
+### Generate (default character: Frank)
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "tell me about your day",
+  "character": "Frank"
+}
+
+### Generate — Olivia
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "is it weird to eat cereal at 3am",
+  "character": "Olivia"
+}
+
+### Generate — August
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "how was the standup?",
+  "character": "August"
+}
+
+### Generate — Robert (TA)
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "can you re-explain the proof from lecture 4?",
+  "character": "Robert"
+}
+
+### Generate — Professor James
+POST {{base}}/generate
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "prompt": "I think my thesis argument about frogs is horrible.",
+  "character": "James"
+}
+
+

@@ -5,6 +5,7 @@ package models
 import (
 	"sync"
 	"time"
+	"github.com/MirkoCalvi/httpserver/internal/ollama"
 )
 
 // JobStatus represents the lifecycle stage of a Job.
@@ -26,6 +27,7 @@ const (
 type Job struct {
 	ID        string
 	UserID    string
+	Character *ollama.Character
 	Prompt    string
 	Status    JobStatus
 	Response  string
