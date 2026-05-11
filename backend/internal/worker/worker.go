@@ -88,7 +88,7 @@ func (p *Pool) process(job *models.Job, workerID int) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 
-	response, err := p.client.Chat(ctx, job.Character, nil, job.Prompt)
+	response, stats, err := p.client.Chat(ctx, job.Character, nil, job.Prompt)
 	if err != nil {
 		p.log.Error("ollama call failed", "job_id", job.ID, "error", err.Error())
 		p.store.SetError(job.ID, err.Error())
@@ -96,5 +96,14 @@ func (p *Pool) process(job *models.Job, workerID int) {
 	}
 
 	p.store.SetResult(job.ID, response)
-	p.log.Info("job done", "job_id", job.ID, "worker_id", workerID)
+	p.log.Info("job done",
+		"job_id", job.ID,
+		"worker_id", workerID,
+		"total_ms", stats.TotalDuration.Milliseconds(),
+		"load_ms", stats.LoadDuration.Milliseconds(),
+		"prompt_tokens", stats.PromptEvalCount,
+		"prompt_eval_ms", stats.PromptEvalDuration.Milliseconds(),
+		"eval_tokens", stats.EvalCount,
+		"eval_ms", stats.EvalDuration.Milliseconds(),
+	)
 }

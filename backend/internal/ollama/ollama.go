@@ -12,7 +12,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
+
+// defaultNumPredict caps the number of tokens the model may generate per chat.
+// Without this, a verbose response on slow (e.g. CPU-only) hardware can
+// outlast JOB_TIMEOUT_SECONDS and the worker context cancels mid-generation.
+// 512 tokens is generous for a chat reply yet fits comfortably inside the
+// default 180s budget even at ~5 tokens/sec.
+const defaultNumPredict = 512
 
 type chatMessage struct {
 	Role    string `json:"role"`
@@ -23,7 +31,19 @@ type chatOptions struct {
 	Temperature float64  `json:"temperature,omitempty"`
 	TopP        float64  `json:"top_p,omitempty"`
 	TopK        int      `json:"top_k,omitempty"`
+	NumPredict  int      `json:"num_predict,omitempty"`
 	Stop        []string `json:"stop,omitempty"`
+}
+
+// ChatStats is Ollama's per-call timing breakdown, useful for diagnosing
+// slow responses (cold-start load vs. prompt eval vs. token generation).
+type ChatStats struct {
+	TotalDuration      time.Duration
+	LoadDuration       time.Duration
+	PromptEvalCount    int
+	PromptEvalDuration time.Duration
+	EvalCount          int
+	EvalDuration       time.Duration
 }
 
 // defaultStop hard-cuts generation when the model starts drifting into
@@ -53,6 +73,15 @@ type chatResponse struct {
 	} `json:"message"`
 
 	Done bool `json:"done"`
+
+	// Timing fields are reported by Ollama in nanoseconds and decode
+	// directly into time.Duration (underlying type int64).
+	TotalDuration      time.Duration `json:"total_duration"`
+	LoadDuration       time.Duration `json:"load_duration"`
+	PromptEvalCount    int           `json:"prompt_eval_count"`
+	PromptEvalDuration time.Duration `json:"prompt_eval_duration"`
+	EvalCount          int           `json:"eval_count"`
+	EvalDuration       time.Duration `json:"eval_duration"`
 }
 
 // Client wraps an *http.Client with Ollama-specific defaults.
@@ -76,14 +105,16 @@ func NewClient(baseURL, model string) *Client {
 	}
 }
 
-// Generate sends prompt to Ollama and returns the model's response text.
-// The caller's ctx governs the timeout.
+// Chat sends a chat completion request to Ollama and returns the assistant's
+// reply along with Ollama's per-call timing breakdown. The caller's ctx
+// governs the timeout. ChatStats is zero-valued when the call fails before
+// the response is decoded.
 func (c *Client) Chat(
 	ctx context.Context,
 	character *Character,
 	history []chatMessage,
 	userMessage string,
-) (string, error) {
+) (string, ChatStats, error) {
 
 	messages := []chatMessage{
 		{
@@ -108,11 +139,12 @@ func (c *Client) Chat(
 			Temperature: character.Parameters.Temperature,
 			TopP:        character.Parameters.TopP,
 			TopK:        character.Parameters.TopK,
+			NumPredict:  defaultNumPredict,
 			Stop:        defaultStop,
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
+		return "", ChatStats{}, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -122,20 +154,20 @@ func (c *Client) Chat(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", ChatStats{}, fmt.Errorf("build request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("call ollama: %w", err)
+		return "", ChatStats{}, fmt.Errorf("call ollama: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf(
+		return "", ChatStats{}, fmt.Errorf(
 			"ollama returned status %d: %s",
 			resp.StatusCode,
 			string(b),
@@ -145,8 +177,17 @@ func (c *Client) Chat(
 	var out chatResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
+		return "", ChatStats{}, fmt.Errorf("decode response: %w", err)
 	}
 
-	return out.Message.Content, nil
+	stats := ChatStats{
+		TotalDuration:      out.TotalDuration,
+		LoadDuration:       out.LoadDuration,
+		PromptEvalCount:    out.PromptEvalCount,
+		PromptEvalDuration: out.PromptEvalDuration,
+		EvalCount:          out.EvalCount,
+		EvalDuration:       out.EvalDuration,
+	}
+
+	return out.Message.Content, stats, nil
 }
