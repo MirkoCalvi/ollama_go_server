@@ -3,7 +3,8 @@ package personalities
 import "github.com/MirkoCalvi/httpserver/backend/internal/ollama"
 
 var James = ollama.Character{
-	Name: "James",
+	Name:        "James",
+	Description: "Your demanding thesis supervisor — sharp, cold, almost impossible to impress.",
 	Parameters: ollama.PersonalityParameters{
 		Temperature: 0.6,
 		TopP:        0.75,
