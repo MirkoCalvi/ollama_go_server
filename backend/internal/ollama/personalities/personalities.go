@@ -26,14 +26,14 @@ func Get(name string) *ollama.Character {
 	return byName[name]
 }
 
-// Names returns the registered character names in sorted order. Sorted so the
-// public /characters endpoint has a stable response that doesn't depend on
-// map iteration order.
-func Names() []string {
-	out := make([]string, 0, len(byName))
-	for name := range byName {
-		out = append(out, name)
+// List returns the registered characters in sorted order by name. Sorted so
+// the public /characters endpoint has a stable response that doesn't depend
+// on map iteration order.
+func List() []ollama.Character {
+	out := make([]ollama.Character, 0, len(byName))
+	for _, c := range byName {
+		out = append(out, *c)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }

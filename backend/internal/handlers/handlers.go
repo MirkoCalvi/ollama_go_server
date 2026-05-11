@@ -145,17 +145,30 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Characters handles GET /characters. Returns the list of character names a
-// client may pass as the "character" field on POST /generate. Unauthenticated
-// — the list is not sensitive and a frontend needs it on the login screen
-// before a Firebase token is available.
+// characterDTO is the public projection of an ollama.Character. The
+// SystemPrompt and Parameters are intentionally NOT exposed — the public
+// /characters endpoint advertises only what a UI needs to pick a character.
+type characterDTO struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// Characters handles GET /characters. Returns the list of available
+// characters (name + short description) a client may pass as the "character"
+// field on POST /generate. Unauthenticated — the list is not sensitive and a
+// frontend needs it on its first render, before a Firebase token is available.
 func (h *Handler) Characters(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, personalities.Names())
+	chars := personalities.List()
+	out := make([]characterDTO, 0, len(chars))
+	for _, c := range chars {
+		out = append(out, characterDTO{Name: c.Name, Description: c.Description})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // GetJob handles GET /jobs/{id}. Returns 404 if the ID is unknown OR if the
