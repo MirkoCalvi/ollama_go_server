@@ -44,9 +44,14 @@ async function handle<T>(res: Response): Promise<T> {
   throw new ApiError(res.status, msg)
 }
 
-export function fetchCharacters(): Promise<string[]> {
+export type Character = {
+  name: string
+  description: string
+}
+
+export function fetchCharacters(): Promise<Character[]> {
   // Public endpoint — no auth needed, no Authorization header.
-  return fetch(`${API_BASE}/characters`).then((r) => handle<string[]>(r))
+  return fetch(`${API_BASE}/characters`).then((r) => handle<Character[]>(r))
 }
 
 export function submitJob(prompt: string, character: string): Promise<JobResponse> {
