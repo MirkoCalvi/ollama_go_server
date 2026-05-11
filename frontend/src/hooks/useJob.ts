@@ -5,7 +5,7 @@ const POLL_INTERVAL_MS = 1000
 
 // `character` is threaded through every non-idle phase because the backend
 // JobResponse doesn't echo the chosen character back — the UI keeps it
-// client-side so JobResult can render the right avatar.
+// client-side so ChatView can render the right avatar.
 export type JobState =
   | { phase: "idle" }
   | { phase: "submitting"; character: string }
