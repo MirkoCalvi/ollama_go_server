@@ -15,6 +15,13 @@ export default function App() {
   // character's description without re-fetching. CharacterList re-fetches
   // independently in its own effect (cheap; happens once per homepage visit).
   useEffect(() => {
+    if (auth.state.status === "signed-out") {
+      // Clear per-session state so a different user signing in lands on the
+      // homepage with a fresh character list, not the previous user's chat.
+      setSelected(null)
+      setCharacters(null)
+      return
+    }
     if (auth.state.status !== "signed-in") return
     fetchCharacters()
       .then(setCharacters)
