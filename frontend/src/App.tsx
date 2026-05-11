@@ -1,14 +1,28 @@
-import { LoaderCircle, LogOut } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { JobResult } from "@/components/JobResult"
+import { useEffect, useState } from "react"
+import { LoaderCircle } from "lucide-react"
+import { CharacterList } from "@/components/CharacterList"
+import { ChatView } from "@/components/ChatView"
 import { LoginScreen } from "@/components/LoginScreen"
-import { PromptForm } from "@/components/PromptForm"
 import { useAuth } from "@/hooks/useAuth"
-import { useJob } from "@/hooks/useJob"
+import { fetchCharacters, type Character } from "@/lib/api"
 
 export default function App() {
   const auth = useAuth()
-  const job = useJob()
+  const [selected, setSelected] = useState<string | null>(null)
+  const [characters, setCharacters] = useState<Character[] | null>(null)
+
+  // App fetches the character list once so ChatView can look up the selected
+  // character's description without re-fetching. CharacterList re-fetches
+  // independently in its own effect (cheap; happens once per homepage visit).
+  useEffect(() => {
+    if (auth.state.status !== "signed-in") return
+    fetchCharacters()
+      .then(setCharacters)
+      .catch(() => {
+        // Silent fallback: ChatView will display an empty description rather
+        // than blocking the chat flow on a metadata fetch failure.
+      })
+  }, [auth.state.status])
 
   if (auth.state.status === "loading") {
     return (
@@ -23,28 +37,28 @@ export default function App() {
   }
 
   const user = auth.state.user
-  const busy = job.state.phase === "submitting" || job.state.phase === "polling"
+  const userLabel = user.displayName ?? user.email ?? user.uid
+
+  if (selected === null) {
+    return (
+      <CharacterList
+        userLabel={userLabel}
+        onSignOut={auth.signOut}
+        onSelect={setSelected}
+      />
+    )
+  }
+
+  const description =
+    characters?.find((c) => c.name === selected)?.description ?? ""
 
   return (
-    <div className="min-h-screen w-full">
-      <header className="border-b">
-        <div className="mx-auto flex max-w-2xl items-center justify-between px-6 py-4">
-          <div className="flex flex-col">
-            <span className="text-sm font-medium">Talk to a character</span>
-            <span className="text-xs text-muted-foreground">
-              {user.displayName ?? user.email ?? user.uid}
-            </span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={auth.signOut}>
-            <LogOut className="h-4 w-4" /> Sign out
-          </Button>
-        </div>
-      </header>
-
-      <main className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-8">
-        <PromptForm busy={busy} onSubmit={job.submit} />
-        <JobResult state={job.state} onReset={job.reset} />
-      </main>
-    </div>
+    <ChatView
+      character={selected}
+      description={description}
+      userLabel={userLabel}
+      onBack={() => setSelected(null)}
+      onSignOut={auth.signOut}
+    />
   )
 }
