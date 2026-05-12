@@ -12,6 +12,7 @@ coverage.out
 .vscode/
 *.swp
 .DS_Store
+CLAUDE.md
 
 # Local env files (do not commit secrets)
 .env

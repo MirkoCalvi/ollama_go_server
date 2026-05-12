@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# install.sh — one-shot setup for FrigidLLM.
+#
+# Installs Ollama (if missing), pulls the default model, downloads Go module
+# deps, installs the frontend's npm deps, and seeds frontend/.env.local with
+# VITE_DEV_MODE=1 so `./launch.sh` works without any Firebase config.
+#
+# Re-runnable: every step is idempotent. Safe to run again after a `git pull`.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+
+OLLAMA_MODEL="${OLLAMA_MODEL:-phi3}"
+
+log()  { printf '\033[1;34m[install]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*" >&2; }
+err()  { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- prerequisites -----------------------------------------------------------
+
+if ! command -v go >/dev/null 2>&1; then
+  err "Go is not installed. Install Go >= 1.21 from https://go.dev/dl/ and re-run."
+fi
+log "Go: $(go version)"
+
+if ! command -v node >/dev/null 2>&1; then
+  err "Node.js is not installed. Install Node >= 18 from https://nodejs.org/ and re-run."
+fi
+log "Node: $(node --version)"
+
+if ! command -v npm >/dev/null 2>&1; then
+  err "npm is not installed (comes with Node). Re-install Node from https://nodejs.org/."
+fi
+
+# --- Ollama -----------------------------------------------------------------
+
+if ! command -v ollama >/dev/null 2>&1; then
+  log "Ollama not found — installing via official script."
+  case "$(uname -s)" in
+    Linux)
+      curl -fsSL https://ollama.com/install.sh | sh
+      ;;
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        brew install ollama
+      else
+        err "Homebrew not found. Install Ollama manually from https://ollama.com/download and re-run."
+      fi
+      ;;
+    *)
+      err "Unsupported OS '$(uname -s)'. Install Ollama manually from https://ollama.com/download and re-run."
+      ;;
+  esac
+else
+  log "Ollama already installed: $(ollama --version 2>&1 | head -1)"
+fi
+
+# Make sure the daemon is running before we try to pull a model.
+if ! curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+  log "Starting Ollama daemon in the background..."
+  nohup ollama serve >/tmp/ollama-install.log 2>&1 &
+  for _ in $(seq 1 20); do
+    sleep 1
+    if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then break; fi
+  done
+  curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1 \
+    || warn "Ollama daemon didn't come up in 20s — check /tmp/ollama-install.log"
+fi
+
+log "Pulling model '$OLLAMA_MODEL' (skip if already present)..."
+ollama pull "$OLLAMA_MODEL"
+
+# --- backend ----------------------------------------------------------------
+
+log "Downloading Go module dependencies..."
+( cd backend && go mod download )
+
+# --- frontend ---------------------------------------------------------------
+
+log "Installing frontend npm dependencies..."
+( cd frontend && npm install )
+
+if [ ! -f frontend/.env.local ]; then
+  log "Seeding frontend/.env.local with VITE_DEV_MODE=1"
+  cp frontend/.env.example frontend/.env.local
+  # Flip the dev-mode flag from 0 to 1.
+  sed -i.bak 's/^VITE_DEV_MODE=0/VITE_DEV_MODE=1/' frontend/.env.local
+  rm -f frontend/.env.local.bak
+else
+  log "frontend/.env.local already exists — leaving it alone."
+fi
+
+log "Done. Run ./launch.sh to start everything in dev mode."

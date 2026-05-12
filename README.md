@@ -103,8 +103,9 @@ override in `[0, 2]`, defaulting to 0.7 when omitted.
 │              See backend/README.md.
 ├── frontend/   React + Vite + TS web app. Firebase Google sign-in + job polling.
 │              See frontend/README.md.
-├── README.md   you are here
-└── CLAUDE.md   guidance for Claude Code working in this repo
+├── install.sh  One-shot setup (installs Ollama, pulls model, npm install, go mod download).
+├── launch.sh   Start Ollama + backend (DEV_MODE=1) + frontend, all at once.
+└── README.md   you are here
 ```
 
 The two halves communicate **only** over HTTP : the frontend never imports the
@@ -113,7 +114,28 @@ backend, and vice versa. CORS is enforced backend-side (single origin, set via
 
 ## Quick start
 
-You need three things running locally:
+The fastest path — two scripts at the repo root handle everything:
+
+```bash
+./install.sh    # installs Ollama (if missing), pulls the model,
+                # downloads Go deps, runs `npm install`, seeds
+                # frontend/.env.local with VITE_DEV_MODE=1.
+
+./launch.sh     # starts Ollama, the Go backend in DEV_MODE=1,
+                # and the Vite dev server. Ctrl-C stops them all.
+                # Open http://localhost:5173.
+```
+
+`launch.sh` **always runs in dev mode** — Firebase is bypassed and the backend
+binds loopback only. You only need Go (≥1.21) and Node (≥18) preinstalled;
+`install.sh` takes care of Ollama and the `phi3` model.
+
+Override the model with `OLLAMA_MODEL=llama3 ./install.sh` (and the same on
+`./launch.sh`).
+
+### Manual setup
+
+If you'd rather run each piece by hand:
 
 1. **Ollama** with a model pulled.
    ```bash
@@ -121,7 +143,7 @@ You need three things running locally:
    # systemd usually starts ollama automatically; otherwise:  ollama serve
    ```
 
-2. **Backend** (in dev mode : bypasses Firebase, binds loopback only):
+2. **Backend** (in dev mode — bypasses Firebase, binds loopback only):
    ```bash
    cd backend
    DEV_MODE=1 go run ./cmd/httpserver
